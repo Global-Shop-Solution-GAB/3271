@@ -1,0 +1,178 @@
+Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Coded by: Melinda Keyes
+'Project Start Date: 1/12/2012
+'Quote: 3092
+'Hook: 17331
+'Description: When either the save button under Est/Quoting> Transactions> Quote Won/Loss or
+' the won/loss button under Est/Quote> File> Quotes> Open is clicked, the GAB script will create a
+' new workflow titled with the quote number and "Won/Loss". All lines of this workflow will execute
+' sequentially and be dependent on the previous line. The meta data for the workflow will include
+' the quote number and the customer. When the workflow is created, an email will be sent to all
+' users listed as assigned on the workflow alerting them that a workflow queue item will be assigned to them soon for the specified quote.
+
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sQuote.Declare(String)
+V.Local.iCourier.Declare(Long)
+V.Local.bWon.Declare(Boolean)
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,17331)
+	V.Local.sQuote.Set(V.Passed.QUOTE)
+	'was at least one line marked as won?
+	F.Intrinsic.Control.If(V.Passed.WIN-COUNT,>,0)
+		V.Local.bWon.Set(True)
+	'was the quote marked as all lines won?
+	F.Intrinsic.Control.ElseIf(V.Passed.000140,=,"Y")
+		V.Local.bWon.Set(True)
+	F.Intrinsic.Control.Else
+		V.Local.bWon.Set(False)
+	F.Intrinsic.Control.EndIf
+	'if something was won, create a workflow
+	F.Intrinsic.Control.If(V.Local.bWon,=,True)
+		F.ODBC.Connection!conX.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+		F.Global.Messaging.IsCourierRunning(V.Local.iCourier)
+		F.Intrinsic.Control.If(V.Local.iCourier,<>,0)
+			F.Intrinsic.Control.CallSub(New_wf,"sQuote",V.Local.sQuote)
+		F.Intrinsic.Control.Else
+			F.Intrinsic.UI.Msgbox("Please ensure courier is running prior to creating workflows.")
+		F.Intrinsic.Control.EndIf
+		F.ODBC.Connection!conX.Close
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_QUOTE_WON_WF.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.Main.End
+
+Program.Sub.New_WF.Start
+F.Intrinsic.Control.SetErrorHandler("New_WF_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sQuote.Declare(String)
+V.Local.sQuery.Declare(String)
+V.Local.sPart.Declare(String)
+V.Local.sCust.Declare(String)
+V.Local.sTitle.Declare(String)
+V.Local.sDesc.Declare(String)
+V.Local.sEmails.Declare(String)
+V.Local.sGroupMem.Declare(String)
+V.Local.sUserEm.Declare(String)
+V.Local.iWF.Declare(Long)
+V.Local.iWFT.Declare(Long)
+V.Local.iC.Declare(Long)
+V.Local.dateStart.Declare(Date)
+V.Local.dateDue.Declare(Date)
+
+V.Local.sQuote.Set(V.Args.sQuote)
+F.Intrinsic.String.LPad(V.Local.sQuote,"0",7,V.Local.sQuote)
+
+'F.Intrinsic.Debug.InvokeDebugger
+'F.Intrinsic.Debug.Stop
+
+F.Intrinsic.String.Concat("SELECT PART, CUSTOMER FROM QUOTE_LINES WHERE QUOTE_NO = '",V.Local.sQuote,"' AND RECORD_TYPE = 'L' AND QUOTE_WON = 'W'",V.Local.sQuery)
+F.ODBC.Connection!conX.OpenLocalRecordsetRO("rst",V.Local.sQuery)
+F.Intrinsic.Control.If(V.ODBC.conX!rst.EOF,<>,True)
+	V.Local.sPart.Set(V.ODBC.conX!rst.FieldValTrim!PART)
+	V.Local.sCust.Set(V.ODBC.conX!rst.FieldValTrim!CUSTOMER)
+F.Intrinsic.Control.Else
+	F.Intrinsic.Control.RaiseError("1000","No record was found with the given quote number.")
+F.Intrinsic.Control.EndIf
+F.ODBC.conX!rst.Close
+
+F.Intrinsic.String.Concat("Quote Won: ",V.Local.sQuote,", Part:",V.Local.sPart,V.Local.sTitle)
+V.Local.dateStart.Set(V.Ambient.Now)
+F.Intrinsic.Date.DateAdd("D",11,V.Local.dateStart,V.Local.dateDue)
+F.Intrinsic.String.Concat("Quote ",V.Local.sQuote,", part ",V.Local.sPart," for ",V.Local.sCust," has been won and a workflow has been created. Please anticipate a queue item for this quote requiring your review.",V.Local.sDesc)
+
+'check to see if a workflow already exists
+F.Intrinsic.String.Concat("SELECT WF_ID FROM ATG_WF_HEADER WHERE META_0 = 'QUOTE' AND REF_0 = '",V.Local.sQuote,"' AND META_1 = 'CUSTOMER' AND REF_1 = '",V.Local.sCust,"'  AND META_2 = 'PART' AND REF_2 = '",V.Local.sPart,"'",V.Local.sQuery)
+F.ODBC.Connection!conX.OpenLocalRecordsetRO("rst",V.Local.sQuery)
+	'if no existing workflow exists for the router, create a new one
+	F.Intrinsic.Control.If(V.ODBC.conx!rst.EOF,=,True)
+		F.Global.WorkFlow.GetTemplateIDFromTitle("Quote Won",V.Local.iWFT)
+
+		F.Intrinsic.Control.If(V.Local.iWFT,=,-1)
+			F.Intrinsic.ui.msgbox("Work Flow Template (Quote Won) Not Found")
+			F.Intrinsic.Control.ExitSub
+		F.Intrinsic.Control.EndIf
+
+		F.Global.workflow.CREATEFROMTEMPLATE(V.Local.iWFT,V.Local.sTitle,V.Ambient.Now,V.Local.dateDue,V.Caller.User,1,V.Local.iWF)
+		F.Intrinsic.Control.If(V.Local.iWF,>,0)
+			F.Intrinsic.debug.setLA("WorkFlow Created: ",V.Local.iWF)
+			'set the meta and reference data
+			'metadata should have quote number and customer
+			F.Global.workflow.setMetadata(V.Local.iWF,1,0,"QUOTE")
+			F.Global.workflow.setreferencedata(V.Local.iWF,0,V.Local.sQuote)
+			F.Global.workflow.setMetadata(V.Local.iWF,1,1,"CUSTOMER")
+			F.Global.workflow.setreferencedata(V.Local.iWF,1,V.Local.sCust)
+			F.Global.workflow.setMetadata(V.Local.iWF,1,2,"PART")
+			F.Global.workflow.setreferencedata(V.Local.iWF,2,V.Local.sPart)
+		F.Intrinsic.Control.EndIf
+	'else workflow already exists
+	F.Intrinsic.Control.Else
+		F.Intrinsic.UI.Msgbox("Approval workflow already exists for this quote.")
+		F.Intrinsic.Control.ExitSub
+	F.Intrinsic.Control.EndIf
+F.ODBC.conX!rst.Close
+
+'after creation, email all assigned users
+F.Global.Security.GetUserEmail(V.Caller.User,V.Caller.CompanyCode,V.Local.sUserEm)
+F.Global.Security.GetGroupMembers("MATERIAL",V.Caller.CompanyCode,V.Local.sGroupMem)
+F.Intrinsic.Control.If(V.Local.sGroupMem,<>,"")
+	F.Intrinsic.String.Split(V.Local.sGroupMem,"*!*",V.Local.sGroupMem)
+	F.Intrinsic.Control.For(V.Local.iC,0,V.Local.sGroupMem.UBound,1)
+		F.Global.Security.GetUserEmail(V.Local.sGroupMem(V.Local.iC),V.Caller.CompanyCode,V.Local.sEmails)
+		F.Global.Messaging.CreateEMMessage(V.Local.sEmails,"Materials Group",V.Local.sUserEm,V.Caller.User,V.Local.sTitle,V.Local.sDesc)
+	F.Intrinsic.Control.Next(V.Local.iC)
+F.Intrinsic.Control.EndIf
+
+F.Global.Security.GetGroupMembers("PLANNING",V.Caller.CompanyCode,V.Local.sGroupMem)
+F.Intrinsic.Control.If(V.Local.sGroupMem,<>,"")
+	F.Intrinsic.String.Split(V.Local.sGroupMem,"*!*",V.Local.sGroupMem)
+	F.Intrinsic.Control.For(V.Local.iC,0,V.Local.sGroupMem.UBound,1)
+		F.Global.Security.GetUserEmail(V.Local.sGroupMem(V.Local.iC),V.Caller.CompanyCode,V.Local.sEmails)
+		F.Global.Messaging.CreateEMMessage(V.Local.sEmails,"Planning Group",V.Local.sUserEm,V.Caller.User,V.Local.sTitle,V.Local.sDesc)
+	F.Intrinsic.Control.Next(V.Local.iC)
+F.Intrinsic.Control.EndIf
+
+F.Global.Security.GetGroupMembers("QUALITY",V.Caller.CompanyCode,V.Local.sGroupMem)
+F.Intrinsic.Control.If(V.Local.sGroupMem,<>,"")
+	F.Intrinsic.String.Split(V.Local.sGroupMem,"*!*",V.Local.sGroupMem)
+	F.Intrinsic.Control.For(V.Local.iC,0,V.Local.sGroupMem.UBound,1)
+		F.Global.Security.GetUserEmail(V.Local.sGroupMem(V.Local.iC),V.Caller.CompanyCode,V.Local.sEmails)
+		F.Global.Messaging.CreateEMMessage(V.Local.sEmails,"Quality Group",V.Local.sUserEm,V.Caller.User,V.Local.sTitle,V.Local.sDesc)
+	F.Intrinsic.Control.Next(V.Local.iC)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.UI.Msgbox("A new workflow has been created for this quote.")
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("New_WF_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_QUOTE_WON_WF.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.New_WF.End
+
+
